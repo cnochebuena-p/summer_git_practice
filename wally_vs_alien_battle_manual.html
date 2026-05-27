@@ -1,0 +1,202 @@
+
+<h2 class="sr-only">Wally vs The Three-Eyed Alien: a manual random walk battle simulator</h2>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  #battle-root { font-family: 'Press Start 2P', monospace; padding: 1.5rem 0; }
+  #title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 1.5rem; letter-spacing: 0.05em; text-align: center; }
+  #ground-display { font-size: 22px; text-align: center; letter-spacing: 4px; margin: 1.5rem 0 1rem; min-height: 40px; line-height: 1.5; }
+  #status { text-align: center; font-size: 10px; color: var(--color-text-secondary); min-height: 20px; margin-bottom: 1.2rem; letter-spacing: 0.05em; }
+  #stats { display: flex; justify-content: center; gap: 2rem; margin-bottom: 1.5rem; }
+  .stat { text-align: center; }
+  .stat-label { font-size: 9px; color: var(--color-text-secondary); margin-bottom: 4px; }
+  .stat-val { font-size: 16px; color: var(--color-text-primary); }
+  #controls { display: flex; gap: 12px; justify-content: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  button { font-family: 'Press Start 2P', monospace; font-size: 9px; padding: 10px 16px; cursor: pointer; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: var(--color-background-secondary); color: var(--color-text-primary); transition: background 0.15s; }
+  button:hover { background: var(--color-background-tertiary); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #speed-row { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 1rem; }
+  #speed-row label { font-size: 9px; color: var(--color-text-secondary); }
+  #speed-row input { width: 100px; }
+  .rain-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+  .raindrop { position: absolute; font-size: 18px; animation: fall linear forwards; opacity: 0.85; font-family: 'Press Start 2P', monospace; }
+  @keyframes fall {
+    0% { transform: translateY(-60px) rotate(0deg); opacity: 0.9; }
+    90% { opacity: 0.85; }
+    100% { transform: translateY(110vh) rotate(360deg); opacity: 0; }
+  }
+  #history { text-align: center; font-size: 9px; color: var(--color-text-secondary); max-width: 480px; margin: 0 auto; line-height: 2; }
+  #history span { margin: 0 4px; }
+  #scene { position: relative; }
+</style>
+
+<div id="battle-root">
+  <div id="title">⚔️ Wally vs The Three-Eyed Alien</div>
+
+  <div id="stats">
+    <div class="stat"><div class="stat-label">Steps</div><div class="stat-val" id="step-count">0</div></div>
+    <div class="stat"><div class="stat-label">Wally wins</div><div class="stat-val" id="w-wins">0</div></div>
+    <div class="stat"><div class="stat-label">Alien wins</div><div class="stat-val" id="a-wins">0</div></div>
+  </div>
+
+  <div id="scene">
+    <div id="ground-display">☠_________☠</div>
+    <div id="rain-layer" class="rain-container"></div>
+  </div>
+  <div id="status">press start to battle</div>
+
+  <div id="speed-row">
+    <label for="speed-sl">speed</label>
+    <input type="range" id="speed-sl" min="1" max="10" value="5" step="1">
+    <span id="speed-val" style="font-size:9px;color:var(--color-text-secondary);">5</span>
+  </div>
+
+  <div id="controls">
+    <button id="btn-start">▶ start</button>
+    <button id="btn-stop" disabled>⏹ stop</button>
+    <button id="btn-reset">↺ reset</button>
+  </div>
+
+  <div id="history"></div>
+</div>
+
+<script>
+const GROUND_LEN = 9;
+function rs() { return Math.random() < 0.5 ? -1 : 1; }
+
+function buildGround(w, t) {
+  let g = Array(GROUND_LEN).fill('_');
+  if (w >= 0 && w < GROUND_LEN) g[w] = '🟫';
+  if (t >= 0 && t < GROUND_LEN) g[t] = '👽';
+  if (t + 1 >= 0 && t + 1 < GROUND_LEN) g[t + 1] = '👁️';
+  return '☠' + g.join('') + '☠';
+}
+
+let state = null;
+let running = false;
+let timer = null;
+let wWins = 0, aWins = 0;
+let historyLog = [];
+
+const groundEl = document.getElementById('ground-display');
+const statusEl = document.getElementById('status');
+const stepEl = document.getElementById('step-count');
+const wEl = document.getElementById('w-wins');
+const aEl = document.getElementById('a-wins');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+const btnReset = document.getElementById('btn-reset');
+const speedSl = document.getElementById('speed-sl');
+const speedVal = document.getElementById('speed-val');
+const historyEl = document.getElementById('history');
+const rainLayer = document.getElementById('rain-layer');
+
+speedSl.addEventListener('input', () => { speedVal.textContent = speedSl.value; });
+
+function initState() { return { w: 2, t: 6, steps: 0 }; }
+function getDelay() { return Math.round(600 / parseInt(speedSl.value)); }
+
+function render() {
+  groundEl.textContent = buildGround(state.w, state.t);
+  stepEl.textContent = state.steps;
+}
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+function addHistory(msg) {
+  historyLog.push(msg);
+  if (historyLog.length > 8) historyLog.shift();
+  historyEl.innerHTML = historyLog.map(m => `<span>${m}</span>`).join(' · ');
+}
+
+function startRain42() {
+  rainLayer.innerHTML = '';
+  for (let i = 0; i < 50; i++) {
+    const drop = document.createElement('div');
+    drop.className = 'raindrop';
+    drop.textContent = '42';
+    drop.style.left = Math.random() * 100 + '%';
+    drop.style.top = '-40px';
+    drop.style.animationDuration = (1.5 + Math.random() * 2.5) + 's';
+    drop.style.animationDelay = (Math.random() * 2) + 's';
+    drop.style.fontSize = (12 + Math.random() * 14) + 'px';
+    drop.style.color = `hsl(${Math.round(180 + Math.random() * 80)}, 80%, 55%)`;
+    rainLayer.appendChild(drop);
+  }
+  setTimeout(() => { rainLayer.innerHTML = ''; }, 5000);
+}
+
+function endBattle(wallyWins) {
+  running = false;
+  clearTimeout(timer);
+  if (wallyWins) {
+    wWins++;
+    wEl.textContent = wWins;
+    setStatus('wally stomped the alien! 💀 press start for another battle');
+    addHistory(`battle ${wWins + aWins}: wally wins in ${state.steps} steps`);
+  } else {
+    aWins++;
+    aEl.textContent = aWins;
+    setStatus('alien escaped! 👽 press start for another battle');
+    addHistory(`battle ${wWins + aWins}: alien wins in ${state.steps} steps`);
+    startRain42();
+  }
+  btnStart.disabled = false;
+  btnStop.disabled = true;
+}
+
+function step() {
+  if (!running) return;
+  const { w, t, steps } = state;
+
+  if (w >= t) {
+    state.steps = steps + 1;
+    render();
+    endBattle(true);
+    return;
+  }
+  if (w <= 0 || t >= GROUND_LEN - 1) {
+    render();
+    endBattle(false);
+    return;
+  }
+
+  state = { w: w + rs(), t: t + rs(), steps: steps + 1 };
+  render();
+  setStatus(`step ${state.steps}: wally @ ${state.w}, alien @ ${state.t}`);
+  timer = setTimeout(step, getDelay());
+}
+
+btnStart.addEventListener('click', () => {
+  if (running) return;
+  state = initState();
+  render();
+  setStatus(`battle begins! wally @ ${state.w} vs alien @ ${state.t}`);
+  running = true;
+  btnStart.disabled = true;
+  btnStop.disabled = false;
+  timer = setTimeout(step, getDelay());
+});
+
+btnStop.addEventListener('click', () => {
+  running = false;
+  clearTimeout(timer);
+  setStatus('paused — press start to run a new battle');
+  btnStart.disabled = false;
+  btnStop.disabled = true;
+});
+
+btnReset.addEventListener('click', () => {
+  running = false;
+  clearTimeout(timer);
+  state = initState();
+  wWins = 0; aWins = 0;
+  wEl.textContent = 0; aEl.textContent = 0;
+  historyLog = [];
+  historyEl.innerHTML = '';
+  rainLayer.innerHTML = '';
+  render();
+  setStatus('press start to battle');
+  btnStart.disabled = false;
+  btnStop.disabled = true;
+});
+</script>

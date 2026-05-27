@@ -1,0 +1,259 @@
+
+<style>
+  *{box-sizing:border-box}
+  body,div,p,h2,h3,span,button,input,label{font-family:var(--font-sans)}
+  canvas.draw{border:0.5px solid var(--color-border-primary);border-radius:var(--border-radius-md);cursor:crosshair;background:#fff;display:block;touch-action:none}
+  .section-label{font-size:13px;color:var(--color-text-secondary);margin:0 0 6px}
+  .class-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:12px;margin-bottom:10px}
+  .class-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .class-name{font-size:14px;font-weight:500;color:var(--color-text-primary);flex:1}
+  .count-badge{font-size:12px;padding:2px 8px;border-radius:20px;background:var(--color-background-secondary);color:var(--color-text-secondary)}
+  .thumb-row{display:flex;flex-wrap:wrap;gap:4px;min-height:28px}
+  .thumb{width:28px;height:28px;border-radius:4px;border:0.5px solid var(--color-border-tertiary)}
+  .bar-bg{flex:1;height:6px;background:var(--color-background-secondary);border-radius:3px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:3px;background:#7F77DD;transition:width 0.3s}
+  .guess-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .guess-label{font-size:13px;color:var(--color-text-secondary);width:130px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .guess-pct{font-size:12px;color:var(--color-text-tertiary);width:32px;text-align:right}
+  #poptart{display:none;background:#EEEDFE;border:0.5px solid #7F77DD;border-radius:var(--border-radius-lg);padding:14px 16px;text-align:center;margin-top:12px}
+  #poptart h3{color:#3C3489;font-size:18px;font-weight:500;margin:0 0 4px}
+  #poptart p{color:#534AB7;font-size:13px;margin:0}
+  #train-status{font-size:13px;color:var(--color-text-secondary);margin-top:6px;min-height:18px}
+  .phase-title{font-size:15px;font-weight:500;color:var(--color-text-primary);margin:0 0 10px}
+  .divider{border:none;border-top:0.5px solid var(--color-border-tertiary);margin:16px 0}
+  .add-class-row{display:flex;gap:8px;margin-bottom:14px}
+  .add-class-row input{flex:1}
+</style>
+
+<h2 class="sr-only">Train your own neural network to recognize your drawings — add categories, draw examples, train, then test</h2>
+
+<div style="padding:1rem 0">
+
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px">
+
+    <div>
+      <p class="phase-title">Step 1 — teach the AI</p>
+      <p class="section-label">Add a category, then draw examples for it</p>
+      <div class="add-class-row">
+        <input type="text" id="newClassName" placeholder="e.g. three-eyed alien" maxlength="24">
+        <button id="addClassBtn">Add</button>
+      </div>
+      <div id="classList"></div>
+
+      <hr class="divider">
+      <p class="phase-title">Step 2 — draw an example</p>
+      <p class="section-label" id="drawing-for-label">Select a category above first</p>
+      <canvas class="draw" id="trainCanvas" width="260" height="200"></canvas>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="addSampleBtn" disabled>Add to training set</button>
+        <button id="clearTrainBtn">Clear</button>
+      </div>
+    </div>
+
+    <div>
+      <p class="phase-title">Step 3 — train</p>
+      <p class="section-label">Need at least 3 examples per category</p>
+      <button id="trainBtn" disabled>Train neural net</button>
+      <div id="train-status"></div>
+
+      <hr class="divider">
+      <p class="phase-title">Step 4 — test it</p>
+      <p class="section-label">Draw something and see if the AI knows</p>
+      <canvas class="draw" id="testCanvas" width="260" height="200"></canvas>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="guessBtn" disabled>Guess what I drew</button>
+        <button id="clearTestBtn">Clear</button>
+      </div>
+      <div id="result-area" style="margin-top:12px"></div>
+      <div id="poptart">
+        <h3>Hooray, the poptarts win!</h3>
+        <p>The AI recognized your three-eyed alien.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+<script>
+const CANVAS_W = 260, CANVAS_H = 200, INPUT_SIZE = 28;
+let classes = [];
+let activeClass = null;
+let model = null;
+let trained = false;
+
+function makeDrawable(canvas, onStroke) {
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  let drawing = false;
+  function pos(e) {
+    const r = canvas.getBoundingClientRect(), sx = canvas.width/r.width, sy = canvas.height/r.height;
+    const src = e.touches ? e.touches[0] : e;
+    return {x:(src.clientX-r.left)*sx, y:(src.clientY-r.top)*sy};
+  }
+  canvas.addEventListener('mousedown', e=>{drawing=true;ctx.beginPath();const p=pos(e);ctx.moveTo(p.x,p.y)});
+  canvas.addEventListener('mousemove', e=>{if(!drawing)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke()});
+  canvas.addEventListener('mouseup', ()=>{drawing=false;if(onStroke)onStroke()});
+  canvas.addEventListener('mouseleave', ()=>drawing=false);
+  canvas.addEventListener('touchstart', e=>{e.preventDefault();drawing=true;ctx.beginPath();const p=pos(e);ctx.moveTo(p.x,p.y)},{passive:false});
+  canvas.addEventListener('touchmove', e=>{e.preventDefault();if(!drawing)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke()},{passive:false});
+  canvas.addEventListener('touchend', e=>{e.preventDefault();drawing=false},{passive:false});
+  return ctx;
+}
+
+const trainCtx = makeDrawable(document.getElementById('trainCanvas'));
+const testCtx = makeDrawable(document.getElementById('testCanvas'));
+
+function clearCanvas(ctx) {
+  ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+}
+
+function getPixels(canvas) {
+  const off = document.createElement('canvas');
+  off.width = INPUT_SIZE; off.height = INPUT_SIZE;
+  const octx = off.getContext('2d');
+  octx.fillStyle = 'white'; octx.fillRect(0,0,INPUT_SIZE,INPUT_SIZE);
+  octx.drawImage(canvas, 0, 0, INPUT_SIZE, INPUT_SIZE);
+  const d = octx.getImageData(0,0,INPUT_SIZE,INPUT_SIZE).data;
+  const pixels = [];
+  for(let i=0;i<d.length;i+=4) pixels.push(1 - d[i]/255);
+  return pixels;
+}
+
+function hasDrawing(canvas) {
+  const ctx = canvas.getContext('2d');
+  const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  return d.some((v,i)=>i%4===3&&v>0);
+}
+
+function renderClasses() {
+  const container = document.getElementById('classList');
+  container.innerHTML = '';
+  classes.forEach((cls, idx) => {
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.style.cursor = 'pointer';
+    if(activeClass === idx) card.style.border = '1.5px solid #7F77DD';
+    card.innerHTML = `<div class="class-header"><span class="class-name">${cls.name}</span><span class="count-badge">${cls.samples.length} samples</span><button data-del="${idx}" style="font-size:11px;padding:2px 6px;color:var(--color-text-secondary)">remove</button></div><div class="thumb-row" id="thumbs-${idx}"></div>`;
+    card.addEventListener('click', e => {
+      if(e.target.dataset.del !== undefined) { classes.splice(parseInt(e.target.dataset.del),1); if(activeClass===parseInt(e.target.dataset.del)) activeClass=null; renderClasses(); updateUI(); return; }
+      activeClass = idx;
+      document.getElementById('drawing-for-label').textContent = `Drawing for: ${cls.name}`;
+      document.getElementById('addSampleBtn').disabled = false;
+      renderClasses();
+    });
+    container.appendChild(card);
+    const thumbRow = document.getElementById(`thumbs-${idx}`);
+    cls.samples.forEach(s => {
+      const c = document.createElement('canvas');
+      c.className = 'thumb'; c.width = INPUT_SIZE; c.height = INPUT_SIZE;
+      const cx = c.getContext('2d');
+      const id = cx.createImageData(INPUT_SIZE, INPUT_SIZE);
+      s.forEach((v,i)=>{ const px=Math.round((1-v)*255); id.data[i*4]=px; id.data[i*4+1]=px; id.data[i*4+2]=px; id.data[i*4+3]=255; });
+      cx.putImageData(id,0,0);
+      thumbRow.appendChild(c);
+    });
+  });
+}
+
+function updateUI() {
+  const enough = classes.length >= 2 && classes.every(c=>c.samples.length>=3);
+  document.getElementById('trainBtn').disabled = !enough;
+  document.getElementById('guessBtn').disabled = !trained;
+  if(!enough) { trained = false; document.getElementById('guessBtn').disabled = true; }
+}
+
+document.getElementById('addClassBtn').addEventListener('click', () => {
+  const inp = document.getElementById('newClassName');
+  const name = inp.value.trim();
+  if(!name || classes.find(c=>c.name.toLowerCase()===name.toLowerCase())) return;
+  classes.push({name, samples:[]});
+  inp.value = '';
+  renderClasses(); updateUI();
+});
+document.getElementById('newClassName').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('addClassBtn').click(); });
+
+document.getElementById('addSampleBtn').addEventListener('click', () => {
+  if(activeClass===null) return;
+  const canvas = document.getElementById('trainCanvas');
+  if(!hasDrawing(canvas)) { document.getElementById('train-status').textContent='Draw something first!'; return; }
+  classes[activeClass].samples.push(getPixels(canvas));
+  clearCanvas(trainCtx);
+  renderClasses(); updateUI();
+  document.getElementById('train-status').textContent = '';
+});
+
+document.getElementById('clearTrainBtn').addEventListener('click', ()=>clearCanvas(trainCtx));
+document.getElementById('clearTestBtn').addEventListener('click', ()=>{ clearCanvas(testCtx); document.getElementById('result-area').innerHTML=''; document.getElementById('poptart').style.display='none'; });
+
+document.getElementById('trainBtn').addEventListener('click', async () => {
+  const status = document.getElementById('train-status');
+  status.textContent = 'Building model...';
+  document.getElementById('trainBtn').disabled = true;
+
+  await tf.ready();
+  if(model) { model.dispose(); model=null; }
+
+  const numClasses = classes.length;
+  model = tf.sequential();
+  model.add(tf.layers.dense({inputShape:[INPUT_SIZE*INPUT_SIZE], units:64, activation:'relu'}));
+  model.add(tf.layers.dense({units:32, activation:'relu'}));
+  model.add(tf.layers.dense({units:numClasses, activation:'softmax'}));
+  model.compile({optimizer:'adam', loss:'categoricalCrossentropy', metrics:['accuracy']});
+
+  const xs = [], ys = [];
+  classes.forEach((cls, idx) => {
+    cls.samples.forEach(s => {
+      xs.push(s);
+      const y = new Array(numClasses).fill(0); y[idx]=1;
+      ys.push(y);
+    });
+  });
+
+  const xTensor = tf.tensor2d(xs);
+  const yTensor = tf.tensor2d(ys);
+
+  let epoch = 0;
+  await model.fit(xTensor, yTensor, {
+    epochs: 60,
+    shuffle: true,
+    callbacks: {
+      onEpochEnd: async (ep, logs) => {
+        epoch = ep+1;
+        if(ep%10===9) status.textContent = `Training... epoch ${epoch}/60 — accuracy: ${Math.round(logs.acc*100)}%`;
+        await tf.nextFrame();
+      }
+    }
+  });
+
+  xTensor.dispose(); yTensor.dispose();
+  trained = true;
+  status.textContent = `Done! Trained on ${xs.length} examples across ${numClasses} categories.`;
+  document.getElementById('guessBtn').disabled = false;
+  document.getElementById('trainBtn').disabled = false;
+});
+
+document.getElementById('guessBtn').addEventListener('click', async () => {
+  const canvas = document.getElementById('testCanvas');
+  if(!hasDrawing(canvas)) return;
+  if(!model || !trained) return;
+
+  const pixels = getPixels(canvas);
+  const input = tf.tensor2d([pixels]);
+  const pred = model.predict(input);
+  const probs = await pred.data();
+  input.dispose(); pred.dispose();
+
+  const indexed = Array.from(probs).map((p,i)=>({name:classes[i].name,p})).sort((a,b)=>b.p-a.p);
+  let html = '';
+  indexed.forEach(({name,p}) => {
+    const pct = Math.round(p*100);
+    html += `<div class="guess-row"><span class="guess-label">${name}</span><div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div><span class="guess-pct">${pct}%</span></div>`;
+  });
+  document.getElementById('result-area').innerHTML = html;
+
+  const top = indexed[0].name.toLowerCase();
+  const isAlien = top.includes('alien') || top.includes('eye') || top.includes('extraterr');
+  document.getElementById('poptart').style.display = isAlien ? 'block' : 'none';
+});
+</script>
