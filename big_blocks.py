@@ -3,7 +3,7 @@
 import handle_image as hi
 
 # first, load our awesome image
-img = hi.load_image("awesome_img.png")
+img = hi.load_image("dog.png")
 
 # next, we compute our green difference with red and blue, and then add them together
 g_r_diff = hi.channel_diff(img, 1, 0)
